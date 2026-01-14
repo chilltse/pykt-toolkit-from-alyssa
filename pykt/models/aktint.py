@@ -147,12 +147,12 @@ class InterferenceAddNorm(nn.Module):
 
         # 门控网络：决定是否使用干扰信息
         # 输出值在[0,1]，0表示不使用，1表示完全使用
-        self.gate_network = nn.Sequential(
-            nn.Linear(2, d_model // 8),
-            nn.ReLU(),
-            nn.Linear(d_model // 8, 1),
-            nn.Sigmoid()  # 确保门控值在[0,1]
-        )
+        # self.gate_network = nn.Sequential(
+        #     nn.Linear(2, d_model // 8),
+        #     nn.ReLU(),
+        #     nn.Linear(d_model // 8, 1),
+        #     nn.Sigmoid()  # 确保门控值在[0,1]
+        # )
         
         # 可学习的缩放因子，初始化为接近0，让模型可以学习是否使用干扰信息
         self.interference_scale = nn.Parameter(torch.zeros(1))
@@ -168,8 +168,9 @@ class InterferenceAddNorm(nn.Module):
             output: 增强后的输出 [batch_size, seq_len, d_model]
         """
         if interference_info is None:
-            # 如果没有干扰信息，直接返回归一化的原始输出
-            return self.ln(X)
+            return self.ln(X) # 如果没有干扰信息，直接返回归一化的原始输出
+        # if True: # 测试，原始模型
+        #     return X
         
         sgap = interference_info.get("sgap", None)
         pcount = interference_info.get("pcount", None)
@@ -217,17 +218,15 @@ class InterferenceAddNorm(nn.Module):
         interference_input = torch.stack([sgap_norm, pcount_norm], dim=-1)
 
         # 计算门控值：基于干扰信息本身决定是否使用
-        gate_value = self.gate_network(interference_input)  # [batch_size, seq_len, 1]
+        # gate_value = self.gate_network(interference_input)  # [batch_size, seq_len, 1]
         
         # 编码为特征 [batch_size, seq_len, d_model]
         interference_features = self.interference_proj(interference_input)
         
         # 双路径融合：
         # 主路径：X（保持不变）
-        # 增强路径：interference_features（可选）
-        # 融合：X + gate * fusion_weight * interference_features
-        # 当gate=0或fusion_weight=0时，完全回退到主路径
-        Y = X + gate_value * self.interference_scale * self.dropout(interference_features)
+        # 融合：X + interference_scale * interference_features
+        Y = X + self.interference_scale * self.dropout(interference_features)
         
         # 层归一化
         return self.ln(Y)
