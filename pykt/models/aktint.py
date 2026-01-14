@@ -144,6 +144,15 @@ class InterferenceAddNorm(nn.Module):
             nn.Linear(d_model // 4, d_model),  # -> d_model
             nn.Dropout(dropout)
         )
+
+        # 门控网络：决定是否使用干扰信息
+        # 输出值在[0,1]，0表示不使用，1表示完全使用
+        self.gate_network = nn.Sequential(
+            nn.Linear(2, d_model // 8),
+            nn.ReLU(),
+            nn.Linear(d_model // 8, 1),
+            nn.Sigmoid()  # 确保门控值在[0,1]
+        )
         
         # 可学习的缩放因子，初始化为接近0，让模型可以学习是否使用干扰信息
         self.interference_scale = nn.Parameter(torch.zeros(1))
@@ -188,20 +197,37 @@ class InterferenceAddNorm(nn.Module):
                 pcount = torch.cat([pcount, pcount[:, -1:].expand(-1, pad_len)], dim=1)
         
         # 归一化干扰指标
-        sgap_max = sgap.max()
-        pcount_max = pcount.max()
-        sgap_norm = sgap.float() / (sgap_max + 1e-6) if sgap_max > 0 else sgap.float()
-        pcount_norm = pcount.float() / (pcount_max + 1e-6) if pcount_max > 0 else pcount.float()
+        # sgap_max = sgap.max()
+        # pcount_max = pcount.max()
+        # sgap_norm = sgap.float() / (sgap_max + 1e-6) if sgap_max > 0 else sgap.float()
+        # pcount_norm = pcount.float() / (pcount_max + 1e-6) if pcount_max > 0 else pcount.float()
+        # 改进的归一化：使用更稳定的方式
+        # 使用tanh归一化，将值映射到[-1,1]，然后缩放到[0,1]
+        sgap_mean = sgap.float().mean()
+        sgap_std = sgap.float().std() + 1e-6
+        sgap_norm = (sgap.float() - sgap_mean) / sgap_std
+        sgap_norm = (torch.tanh(sgap_norm) + 1) / 2  # 映射到[0,1]
+        
+        pcount_mean = pcount.float().mean()
+        pcount_std = pcount.float().std() + 1e-6
+        pcount_norm = (pcount.float() - pcount_mean) / pcount_std
+        pcount_norm = (torch.tanh(pcount_norm) + 1) / 2  # 映射到[0,1]
         
         # 拼接干扰指标 [batch_size, seq_len, 2]
         interference_input = torch.stack([sgap_norm, pcount_norm], dim=-1)
+
+        # 计算门控值：基于干扰信息本身决定是否使用
+        gate_value = self.gate_network(interference_input)  # [batch_size, seq_len, 1]
         
         # 编码为特征 [batch_size, seq_len, d_model]
         interference_features = self.interference_proj(interference_input)
         
-        # 残差连接：X + scale * interference_features
-        # 初始时 scale 接近0，所以接近原始输出
-        Y = X + self.interference_scale * self.dropout(interference_features)
+        # 双路径融合：
+        # 主路径：X（保持不变）
+        # 增强路径：interference_features（可选）
+        # 融合：X + gate * fusion_weight * interference_features
+        # 当gate=0或fusion_weight=0时，完全回退到主路径
+        Y = X + gate_value * self.interference_scale * self.dropout(interference_features)
         
         # 层归一化
         return self.ln(Y)
@@ -289,6 +315,10 @@ class AKTInt(nn.Module):
             ), nn.Dropout(self.dropout),
             nn.Linear(256, 1)
         )
+        # 添加可学习的输出偏置，用于校准概率分布
+        # 初始化为0，模型可以通过训练自动学习最优的偏置值
+        # 这有助于解决AUC提高但ACC降低的问题（概率分布偏移）
+        self.output_bias = nn.Parameter(torch.zeros(1))
         self.reset()
 
     def reset(self):
@@ -351,6 +381,10 @@ class AKTInt(nn.Module):
 
         concat_q = torch.cat([d_output, q_embed_data], dim=-1)
         output = self.out(concat_q).squeeze(-1)
+        # 添加可学习的偏置来校准概率分布
+        # 这可以帮助模型自动调整输出，使预测概率分布更合理
+        # 从而在保持高AUC的同时提高ACC
+        output = output + self.output_bias
         m = nn.Sigmoid()
         preds = m(output)
         if not qtest:
