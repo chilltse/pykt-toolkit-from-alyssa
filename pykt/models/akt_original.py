@@ -323,7 +323,7 @@ def attention(q, k, v, d_k, mask, dropout, zero_pad, gamma=None, pdiff=None):
         total_effect = torch.clamp(torch.clamp(
             (dist_scores*gamma*diff).exp(), min=1e-5), max=1e5)
 
-    # scores = scores * total_effect # 消融实验，去除遗忘的影响
+    scores = scores * total_effect
 
     scores.masked_fill_(mask == 0, -1e32)
     scores = F.softmax(scores, dim=-1)
