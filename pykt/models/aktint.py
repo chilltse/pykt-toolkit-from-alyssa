@@ -182,7 +182,7 @@ class InterferenceAddNorm(nn.Module):
         
         # 拼接干扰指标 [batch_size, seq_len, 4]
         # interference_input = torch.stack([rgap_norm, sgap_norm, pcount_norm, pcumcount_norm], dim=-1)  # 消融实验：暂时注释
-        interference_input = torch.stack([pcumcount_norm], dim=-1)  # 消融实验：暂时注释
+        interference_input = torch.stack([scumcount_norm], dim=-1)  # 消融实验：暂时注释
         
         # 编码为特征 [batch_size, seq_len, d_model]
         interference_features = self.interference_proj(interference_input)
@@ -246,6 +246,7 @@ class AKTInt(nn.Module):
             d_ff : dimension for fully conntected net inside the basic block
             kq_same: if key query same, kq_same=1, else = 0
         """
+        print(f"#####################n_pid:{n_pid}######################")
         self.model_name = "aktint"
         self.n_question = n_question
         self.dropout = dropout
@@ -259,7 +260,8 @@ class AKTInt(nn.Module):
         if self.n_pid > 0:
             self.difficult_param = nn.Embedding(self.n_pid+1, 1)
             self.q_embed_diff = nn.Embedding(self.n_question+1, embed_l)
-            self.qa_embed_diff = nn.Embedding(2 * self.n_question + 1, embed_l)
+            # self.qa_embed_diff = nn.Embedding(2 * self.n_question + 1, embed_l)
+            self.qa_embed_diff = nn.Embedding(2, embed_l) # 源代码bug？
 
         if emb_type.startswith("qid"):
             self.q_embed = nn.Embedding(self.n_question, embed_l)
@@ -428,6 +430,7 @@ class TransformerLayerInt(nn.Module):
         self.layer_norm2 = nn.LayerNorm(d_model)
         self.dropout2 = nn.Dropout(dropout)
 
+    # q_data是KC id，target是response, pid_data是question id
     def forward(self, mask, query, key, values, apply_pos=True, pdiff=None,
                 rgap=None, sgap=None, pcount=None, pcumcount=None, scumcount=None):
         seqlen, batch_size = query.size(1), query.size(0)
