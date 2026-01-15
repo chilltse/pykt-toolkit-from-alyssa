@@ -1,3 +1,4 @@
+# This has removed the forgetting effect删除了遗忘模块
 import torch
 from torch import nn
 from torch.nn.init import xavier_uniform_
