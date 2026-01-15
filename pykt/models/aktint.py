@@ -10,110 +10,48 @@ import numpy as np
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def calculate_sgap(concepts, max_gap=300):
+def calculate_pcumcount(concepts):
     """
-    计算到下一个相同概念出现的间隔（Successor Gap, sgap）
-    
-    这个函数用于计算每个位置到下一个相同概念出现的距离。
-    sgap反映了"未来重复的临近性"：如果相同概念很快会再次出现，sgap值较小，
-    说明该概念的记忆可能因为即将重复而得到强化。
-    
-    例如，对于序列 [A, B, A, C, B]：
-    - 位置0的A：下一个A在位置2，sgap = 2
-    - 位置1的B：下一个B在位置4，sgap = 3
-    - 位置2的A：没有下一个A，sgap = max_gap-1
-    
-    参数:
-        concepts: 形状为 [batch_size, seq_len] 的张量，包含概念ID
-                  每个元素代表一个学习项目对应的概念
-        max_gap: 最大间隔值，用于限制sgap的上限（默认300）
-                 如果到下一个相同概念的距离超过max_gap，则设为max_gap-1
-    
-    返回:
-        sgap: 形状为 [batch_size, seq_len] 的张量，包含每个位置的间隔值
-              值越大表示距离下一个相同概念越远（或不存在）
-    
-    算法说明:
-        1. 初始化sgap矩阵，默认值为max_gap-1（表示没有找到下一个相同概念）
-        2. 对每个批次和每个位置，查找后续序列中第一个相同概念的位置
-        3. 计算间隔距离，并限制在max_gap-1以内
-    """
-    """
-    For each position, calculate gap to NEXT occurrence of same concept.
-
-    Args:
-        concepts: Tensor of shape [batch_size, seq_len] containing concept IDs
-        max_gap: Maximum gap value to cap at (default 300)
-
-    Returns:
-        sgap: Tensor of shape [batch_size, seq_len] with gap values
-    """
-    batch_size, seq_len = concepts.shape
-    sgap = torch.full((batch_size, seq_len), max_gap - 1, dtype=torch.long, device=concepts.device)
-
-    for b in range(batch_size):
-        for i in range(seq_len):
-            concept = concepts[b, i].item()
-            # Find next occurrence of same concept
-            for j in range(i + 1, seq_len):
-                if concepts[b, j].item() == concept:
-                    sgap[b, i] = min(j - i, max_gap - 1)
-                    break
-
-    return sgap
-
-
-def calculate_pcount(concepts):
-    """
-    计算自上次相同概念出现以来的项目数（Predecessor Count, pcount）
+    计算自上次相同概念出现以来的项目数（Predecessor Cumulative Count, pcumcount）
     
     这个函数用于计算每个位置自上次相同概念出现以来，中间经历了多少个不同的学习项目。
-    pcount反映了"干扰程度"：如果自上次出现以来经历了很多其他概念，pcount值较大，
+    pcumcount反映了"干扰程度"：如果自上次出现以来经历了很多其他概念，pcumcount值较大，
     说明该概念的记忆可能因为干扰而减弱。
     
     例如，对于序列 [A, B, C, A, D, B]：
-    - 位置0的A：首次出现，pcount = 0
-    - 位置1的B：首次出现，pcount = 0
-    - 位置2的C：首次出现，pcount = 0
-    - 位置3的A：上次在位置0，中间有2个项目（B, C），pcount = 3 - 0 = 3
-    - 位置4的D：首次出现，pcount = 0
-    - 位置5的B：上次在位置1，中间有3个项目（C, A, D），pcount = 5 - 1 = 4
+    - 位置0的A：首次出现，pcumcount = 0
+    - 位置1的B：首次出现，pcumcount = 0
+    - 位置2的C：首次出现，pcumcount = 0
+    - 位置3的A：上次在位置0，中间有2个项目（B, C），pcumcount = 3 - 0 = 3
+    - 位置4的D：首次出现，pcumcount = 0
+    - 位置5的B：上次在位置1，中间有3个项目（C, A, D），pcumcount = 5 - 1 = 4
     
     参数:
         concepts: 形状为 [batch_size, seq_len] 的张量，包含概念ID
     
     返回:
-        pcount: 形状为 [batch_size, seq_len] 的张量，包含每个位置的计数
-                0表示该概念首次出现，大于0表示自上次出现以来的项目数
+        pcumcount: 形状为 [batch_size, seq_len] 的张量，包含每个位置的计数
+                   0表示该概念首次出现，大于0表示自上次出现以来的项目数
     
     算法说明:
         1. 使用字典记录每个概念最后出现的位置
         2. 对每个位置，如果该概念之前出现过，计算当前位置与上次位置的差值
-        3. 如果首次出现，则pcount为0
-    """
-    """
-    For each position, count items since LAST occurrence of same concept.
-
-    Args:
-        concepts: Tensor of shape [batch_size, seq_len] containing concept IDs
-
-    Returns:
-        pcount: Tensor of shape [batch_size, seq_len] with count values
+        3. 如果首次出现，则pcumcount为0
     """
     batch_size, seq_len = concepts.shape
-    pcount = torch.zeros((batch_size, seq_len), dtype=torch.long, device=concepts.device)
+    pcumcount = torch.zeros((batch_size, seq_len), dtype=torch.long, device=concepts.device)
 
     for b in range(batch_size):
         concept_last_pos = {}
         for i in range(seq_len):
             concept = concepts[b, i].item()
             if concept in concept_last_pos:
-                pcount[b, i] = i - concept_last_pos[concept]
+                pcumcount[b, i] = i - concept_last_pos[concept]
             else:
-                pcount[b, i] = 0  # First occurrence
+                pcumcount[b, i] = 0  # First occurrence
             concept_last_pos[concept] = i
 
-    return pcount
+    return pcumcount
 
 
 class Dim(IntEnum):
@@ -126,7 +64,14 @@ class InterferenceAddNorm(nn.Module):
     """
     干扰信息的残差连接和层归一化模块
     
-    将干扰信息（sgap, pcount）编码为特征，然后通过残差连接添加到注意力输出中。
+    使用类似dkt_forget的干扰指标：
+    - rgap: 到上次相同概念出现的时间间隔（基于时间戳，分钟）
+    - sgap: 到上一个项目的时间间隔（基于时间戳，分钟）
+    - pcount: 该概念之前出现的累积次数
+    - pcumcount: 自上次相同概念出现以来的项目数（位置间隔）
+    - scumcount: 到下一个相同概念出现的距离（位置间隔，存在信息泄露，仅用于消融实验）
+    
+    将干扰信息编码为特征，然后通过残差连接添加到注意力输出中。
     这样即使干扰信息无效，模型也能回退到原始行为。
     
     类似AddNorm的设计，确保模型加上干扰机制后不会变得更差。
@@ -137,95 +82,113 @@ class InterferenceAddNorm(nn.Module):
         self.ln = nn.LayerNorm(d_model)
         
         # 将干扰指标编码为特征
-        # sgap和pcount都是标量，需要映射到d_model维度
+        # 输入维度：rgap + sgap + pcount + pcumcount = 4
         self.interference_proj = nn.Sequential(
-            nn.Linear(2, d_model // 4),  # sgap + pcount -> d_model//4
-            nn.ReLU(),
-            nn.Linear(d_model // 4, d_model),  # -> d_model
+            # nn.Linear(2, d_model // 4),  # 4个指标 -> d_model//4
+            # nn.Linear(d_model // 4, d_model),  # -> d_model
+            nn.Linear(1, d_model // 4),  # 消融实验，只留下pcumcount
+            nn.ReLU(),  # 添加激活函数，避免梯度消失
+            nn.Linear(d_model // 4, d_model),  # 消融实验，只留下pcumcount
             nn.Dropout(dropout)
         )
-
-        # 门控网络：决定是否使用干扰信息
-        # 输出值在[0,1]，0表示不使用，1表示完全使用
-        # self.gate_network = nn.Sequential(
-        #     nn.Linear(2, d_model // 8),
-        #     nn.ReLU(),
-        #     nn.Linear(d_model // 8, 1),
-        #     nn.Sigmoid()  # 确保门控值在[0,1]
-        # )
         
-        # 可学习的缩放因子，初始化为接近0，让模型可以学习是否使用干扰信息
+        # 可学习的缩放因子，初始化为0，让模型可以学习是否使用干扰信息
         self.interference_scale = nn.Parameter(torch.zeros(1))
         
     def forward(self, X, interference_info=None):
         """
         参数:
             X: 原始注意力输出 [batch_size, seq_len, d_model]
-            interference_info: 干扰信息字典，包含 'sgap' 和 'pcount'
-                             [batch_size, seq_len]
+            interference_info: 干扰信息字典，包含：
+                             - 'rgap': 到上次相同概念的时间间隔 [batch_size, seq_len]
+                             - 'sgap': 到上一个项目的时间间隔 [batch_size, seq_len]
+                             - 'pcount': 该概念之前出现的累积次数 [batch_size, seq_len]
+                             - 'pcumcount': 自上次相同概念出现以来的项目数 [batch_size, seq_len]
+                             - 'scumcount': 到下一个相同概念出现的距离 [batch_size, seq_len]
         
         返回:
             output: 增强后的输出 [batch_size, seq_len, d_model]
         """
         if interference_info is None:
-            return self.ln(X) # 如果没有干扰信息，直接返回归一化的原始输出
-        # if True: # 测试，原始模型
-        #     return X
+            return self.ln(X)  # 如果没有干扰信息，直接返回归一化的原始输出
         
-        sgap = interference_info.get("sgap", None)
-        pcount = interference_info.get("pcount", None)
+        # 提取干扰指标
+        rgap = interference_info.get("rgap", None)  # 消融实验：暂时注释
+        sgap = interference_info.get("sgap", None)  # 消融实验：暂时注释
+        pcount = interference_info.get("pcount", None)  # 消融实验：暂时注释
+        pcumcount = interference_info.get("pcumcount", None)  # 消融实验：暂时注释
+        scumcount = interference_info.get("scumcount", None)  # 消融实验：只使用 scumcount
         
-        if sgap is None or pcount is None:
+        # 如果缺少任何指标，返回归一化的原始输出
+        missing = []  # 消融实验：暂时注释
+        if rgap is None:  # 消融实验：暂时注释
+            missing.append("rgap")
+        if sgap is None:  # 消融实验：暂时注释
+            missing.append("sgap")
+        if pcount is None:  # 消融实验：暂时注释
+            missing.append("pcount")
+        if pcumcount is None:  # 消融实验：暂时注释
+            missing.append("pcumcount")
+        if scumcount is None:
+            print(f"[InterferenceAddNorm] 缺少干扰指标: scumcount")
             return self.ln(X)
-        
-        # 确保sgap和pcount是2D张量 [batch_size, seq_len]
-        if sgap.dim() == 1:
+        if missing:  # 消融实验：暂时注释
+            print(f"[InterferenceAddNorm] 缺少干扰指标: {', '.join(missing)}")
+            return self.ln(X)
+    
+        # 确保所有指标都是2D张量 [batch_size, seq_len]
+        if rgap.dim() == 1:  # 消融实验：暂时注释
+            rgap = rgap.unsqueeze(0)
+        if sgap.dim() == 1:  # 消融实验：暂时注释
             sgap = sgap.unsqueeze(0)
-        if pcount.dim() == 1:
+        if pcount.dim() == 1:  # 消融实验：暂时注释
             pcount = pcount.unsqueeze(0)
+        if pcumcount.dim() == 1:  # 消融实验：暂时注释
+            pcumcount = pcumcount.unsqueeze(0)
+        if scumcount.dim() == 1:
+            scumcount = scumcount.unsqueeze(0)
+        
+        batch_size, seq_len, d_model = X.shape
         
         # 确保维度匹配X的序列长度
-        batch_size, seq_len, d_model = X.shape
-        if sgap.size(1) != seq_len:
-            # 如果维度不匹配，截断或填充
-            if sgap.size(1) > seq_len:
-                sgap = sgap[:, :seq_len]
-                pcount = pcount[:, :seq_len]
-            else:
-                # 填充（使用最后一个值）
-                pad_len = seq_len - sgap.size(1)
-                sgap = torch.cat([sgap, sgap[:, -1:].expand(-1, pad_len)], dim=1)
-                pcount = torch.cat([pcount, pcount[:, -1:].expand(-1, pad_len)], dim=1)
+        def align_dim(gap, target_len):
+            if gap.size(1) != target_len:
+                if gap.size(1) > target_len:
+                    return gap[:, :target_len]
+                else:
+                    pad_len = target_len - gap.size(1)
+                    return torch.cat([gap, gap[:, -1:].expand(-1, pad_len)], dim=1)
+            return gap
         
-        # 归一化干扰指标
-        # sgap_max = sgap.max()
-        # pcount_max = pcount.max()
-        # sgap_norm = sgap.float() / (sgap_max + 1e-6) if sgap_max > 0 else sgap.float()
-        # pcount_norm = pcount.float() / (pcount_max + 1e-6) if pcount_max > 0 else pcount.float()
-        # 改进的归一化：使用更稳定的方式
-        # 使用tanh归一化，将值映射到[-1,1]，然后缩放到[0,1]
-        sgap_mean = sgap.float().mean()
-        sgap_std = sgap.float().std() + 1e-6
-        sgap_norm = (sgap.float() - sgap_mean) / sgap_std
-        sgap_norm = (torch.tanh(sgap_norm) + 1) / 2  # 映射到[0,1]
+        rgap = align_dim(rgap, seq_len)  # 消融实验：暂时注释
+        sgap = align_dim(sgap, seq_len)  # 消融实验：暂时注释
+        pcount = align_dim(pcount, seq_len)  # 消融实验：暂时注释
+        pcumcount = align_dim(pcumcount, seq_len)  # 消融实验：暂时注释
+        scumcount = align_dim(scumcount, seq_len)
         
-        pcount_mean = pcount.float().mean()
-        pcount_std = pcount.float().std() + 1e-6
-        pcount_norm = (pcount.float() - pcount_mean) / pcount_std
-        pcount_norm = (torch.tanh(pcount_norm) + 1) / 2  # 映射到[0,1]
+        # 归一化干扰指标（使用Z-score归一化）
+        def normalize_gap(gap):
+            gap_mean = gap.float().mean()
+            gap_std = gap.float().std() + 1e-6
+            gap_norm = torch.clamp((gap.float() - gap_mean) / gap_std, -3, 3)
+            return torch.sigmoid(gap_norm)
+            # return (torch.tanh(gap_norm) + 1) / 2  # 映射到[0,1]
         
-        # 拼接干扰指标 [batch_size, seq_len, 2]
-        interference_input = torch.stack([sgap_norm, pcount_norm], dim=-1)
-
-        # 计算门控值：基于干扰信息本身决定是否使用
-        # gate_value = self.gate_network(interference_input)  # [batch_size, seq_len, 1]
+        rgap_norm = normalize_gap(rgap)  # 消融实验：暂时注释
+        sgap_norm = normalize_gap(sgap)  # 消融实验：暂时注释
+        pcount_norm = normalize_gap(pcount)  # 消融实验：暂时注释
+        pcumcount_norm = normalize_gap(pcumcount)  # 消融实验：暂时注释
+        scumcount_norm = normalize_gap(scumcount)
+        
+        # 拼接干扰指标 [batch_size, seq_len, 4]
+        # interference_input = torch.stack([rgap_norm, sgap_norm, pcount_norm, pcumcount_norm], dim=-1)  # 消融实验：暂时注释
+        interference_input = torch.stack([pcumcount_norm], dim=-1)  # 消融实验：暂时注释
         
         # 编码为特征 [batch_size, seq_len, d_model]
         interference_features = self.interference_proj(interference_input)
         
-        # 双路径融合：
-        # 主路径：X（保持不变）
-        # 融合：X + interference_scale * interference_features
+        # 残差连接：X + scale * interference_features
+        # 初始时 scale 接近0，所以接近原始输出
         Y = X + self.interference_scale * self.dropout(interference_features)
         
         # 层归一化
@@ -245,9 +208,11 @@ class AKTInt(nn.Module):
            - 距离越远的历史信息，权重衰减越大
         
         2. 干扰衰减（Interference Decay）：基于概念间干扰的遗忘
-           - sgap: 到下一个相同概念出现的间隔（反映未来重复的临近性）
-           - pcount: 自上次相同概念出现以来的项目数（反映干扰程度）
-           - 使用beta参数控制干扰衰减率
+           - rgap: 到上次相同概念出现的时间间隔（基于时间戳，分钟）
+           - sgap: 到上一个项目的时间间隔（基于时间戳，分钟）
+           - pcount: 该概念之前出现的累积次数
+           - pcumcount: 自上次相同概念出现以来的项目数（位置间隔）
+           - 通过残差连接（AddNorm）添加干扰信息，避免信息泄露
     
     模型架构:
         1. 嵌入层：将问题ID、答案等转换为向量表示
@@ -258,7 +223,7 @@ class AKTInt(nn.Module):
         - q_data: 问题/概念ID序列 [batch_size, seq_len]
         - target: 学生回答（正确/错误）序列 [batch_size, seq_len]
         - pid_data: 问题ID序列（可选）[batch_size, seq_len]
-        - dgaps: 干扰数据字典，包含sgaps和pcounts
+        - dgaps: 干扰数据字典，包含rgaps, sgaps, pcounts, pcumcounts
     
     输出:
         - preds: 预测概率 [batch_size, seq_len]
@@ -372,11 +337,16 @@ class AKTInt(nn.Module):
             c_reg_loss = 0.
 
         # Extract interference data
+        # 使用新的指标：rgap, sgap, pcount（从calC计算，基于时间戳）
+        # 以及pcumcount（位置间隔）
+        rgap = dgaps.get("rgaps", None) if dgaps is not None else None
         sgap = dgaps.get("sgaps", None) if dgaps is not None else None
         pcount = dgaps.get("pcounts", None) if dgaps is not None else None
+        pcumcount = dgaps.get("pcumcounts", None) if dgaps is not None else None
+        scumcount = dgaps.get("scumcounts", None) if dgaps is not None else None
 
         d_output = self.model(q_embed_data, qa_embed_data, pid_embed_data,
-                              sgap=sgap, pcount=pcount)
+                              rgap=rgap, sgap=sgap, pcount=pcount, pcumcount=pcumcount, scumcount=scumcount)
 
         concat_q = torch.cat([d_output, q_embed_data], dim=-1)
         output = self.out(concat_q).squeeze(-1)
@@ -412,7 +382,7 @@ class ArchitectureInt(nn.Module):
             ])
 
     def forward(self, q_embed_data, qa_embed_data, pid_embed_data,
-                sgap=None, pcount=None):
+                rgap=None, sgap=None, pcount=None, pcumcount=None, scumcount=None):
         seqlen, batch_size = q_embed_data.size(1), q_embed_data.size(0)
 
         qa_pos_embed = qa_embed_data
@@ -425,17 +395,17 @@ class ArchitectureInt(nn.Module):
         # encoder
         for block in self.blocks_1:
             y = block(mask=1, query=y, key=y, values=y, pdiff=pid_embed_data,
-                     sgap=sgap, pcount=pcount)
+                     rgap=rgap, sgap=sgap, pcount=pcount, pcumcount=pcumcount, scumcount=scumcount)
         flag_first = True
         for block in self.blocks_2:
             if flag_first:
                 x = block(mask=1, query=x, key=x,
                           values=x, apply_pos=False, pdiff=pid_embed_data,
-                          sgap=sgap, pcount=pcount)
+                          rgap=rgap, sgap=sgap, pcount=pcount, pcumcount=pcumcount, scumcount=scumcount)
                 flag_first = False
             else:
                 x = block(mask=0, query=x, key=x, values=y, apply_pos=True, pdiff=pid_embed_data,
-                          sgap=sgap, pcount=pcount)
+                          rgap=rgap, sgap=sgap, pcount=pcount, pcumcount=pcumcount, scumcount=scumcount)
                 flag_first = True
         return x
 
@@ -459,7 +429,7 @@ class TransformerLayerInt(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, mask, query, key, values, apply_pos=True, pdiff=None,
-                sgap=None, pcount=None):
+                rgap=None, sgap=None, pcount=None, pcumcount=None, scumcount=None):
         seqlen, batch_size = query.size(1), query.size(0)
         nopeek_mask = np.triu(
             np.ones((1, 1, seqlen, seqlen)), k=mask).astype('uint8')
@@ -467,11 +437,11 @@ class TransformerLayerInt(nn.Module):
         if mask == 0:
             query2 = self.masked_attn_head(
                 query, key, values, mask=src_mask, zero_pad=True, pdiff=pdiff,
-                sgap=sgap, pcount=pcount)
+                rgap=rgap, sgap=sgap, pcount=pcount, pcumcount=pcumcount, scumcount=scumcount)
         else:
             query2 = self.masked_attn_head(
                 query, key, values, mask=src_mask, zero_pad=False, pdiff=pdiff,
-                sgap=sgap, pcount=pcount)
+                rgap=rgap, sgap=sgap, pcount=pcount, pcumcount=pcumcount, scumcount=scumcount)
 
         query = query + self.dropout1((query2))
         query = self.layer_norm1(query)
@@ -529,7 +499,7 @@ class MultiHeadAttentionInt(nn.Module):
                 constant_(self.q_linear.bias, 0.)
             constant_(self.out_proj.bias, 0.)
 
-    def forward(self, q, k, v, mask, zero_pad, pdiff=None, sgap=None, pcount=None):
+    def forward(self, q, k, v, mask, zero_pad, pdiff=None, rgap=None, sgap=None, pcount=None, pcumcount=None, scumcount=None):
         bs = q.size(0)
 
         if self.emb_type.endswith("avgpool"):
@@ -554,19 +524,29 @@ class MultiHeadAttentionInt(nn.Module):
                 pdiff = None
             # 计算注意力（不应用干扰衰减，只应用时间衰减）
             scores = attention_int(q, k, v, self.d_k,
-                            mask, self.dropout, zero_pad, gammas, pdiff,
-                            sgap=None, pcount=None, beta=None)
+                            mask, self.dropout, zero_pad, gammas, pdiff)
 
             concat = scores.transpose(1, 2).contiguous()\
                 .view(bs, -1, self.d_model)
             
             # 应用干扰信息的残差连接（AddNorm形式）
             interference_info = None
-            if sgap is not None and pcount is not None:
-                # 确保sgap和pcount的维度匹配
+            # 消融实验：只使用 scumcount
+            # if rgap is not None and sgap is not None and pcount is not None and pcumcount is not None and scumcount is not None:  # 消融实验：暂时注释
+            if scumcount is not None:
+                # 确保所有干扰指标的维度匹配
                 seq_len = concat.size(1)
-                if sgap.dim() == 2 and sgap.size(1) == seq_len:
-                    interference_info = {"sgap": sgap, "pcount": pcount}
+                if (rgap.dim() == 2 and rgap.size(1) == seq_len and  # 消融实验：暂时注释
+                    sgap.dim() == 2 and sgap.size(1) == seq_len and  # 消融实验：暂时注释
+                    pcount.dim() == 2 and pcount.size(1) == seq_len and  # 消融实验：暂时注释
+                    pcumcount.dim() == 2 and pcumcount.size(1) == seq_len):  # 消融实验：暂时注释
+                    interference_info = {
+                        "rgap": rgap,  # 消融实验：暂时注释
+                        "sgap": sgap,  # 消融实验：暂时注释
+                        "pcount": pcount,  # 消融实验：暂时注释
+                        "pcumcount": pcumcount,  # 消融实验：暂时注释
+                        "scumcount": scumcount
+                    }
             concat = self.interference_addnorm(concat, interference_info)
 
         output = self.out_proj(concat)
@@ -580,12 +560,10 @@ class MultiHeadAttentionInt(nn.Module):
         return scores
 
 
-def attention_int(q, k, v, d_k, mask, dropout, zero_pad, gamma=None, pdiff=None,
-              sgap=None, pcount=None, beta=None):
+def attention_int(q, k, v, d_k, mask, dropout, zero_pad, gamma=None, pdiff=None):
     """
     注意力计算（只应用时间衰减，干扰信息在输出层通过残差连接添加）
     
-    注意：sgap, pcount, beta 参数保留以保持接口兼容性，但不再在此函数中使用。
     干扰信息现在通过 InterferenceAddNorm 模块在 MultiHeadAttentionInt 中处理。
 
     Args:
@@ -596,9 +574,6 @@ def attention_int(q, k, v, d_k, mask, dropout, zero_pad, gamma=None, pdiff=None,
         zero_pad: Whether to zero-pad first position
         gamma: Learnable temporal decay parameter
         pdiff: Problem difficulty (optional)
-        sgap: Gap to next occurrence of same concept [bs, seq_len] (已废弃，保留以兼容)
-        pcount: Count of items since last occurrence [bs, seq_len] (已废弃，保留以兼容)
-        beta: Learnable interference decay parameter [n_heads, 1, 1] (已废弃，保留以兼容)
     """
     scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(d_k)
     bs, head, seqlen = scores.size(0), scores.size(1), scores.size(2)

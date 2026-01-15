@@ -136,8 +136,10 @@ class KTDataset(Dataset):
                 - mask_seqs (torch.tensor): masked value sequence, shape is seqlen-1
                 - select_masks (torch.tensor): is select to calculate the performance or not
             - **dcurgaps (dict)**: dictionary with interference metrics:
-                - sgaps (torch.tensor): gap to next occurrence of same concept
-                - pcounts (torch.tensor): count since last occurrence of same concept
+                - rgaps (torch.tensor): time gap to last occurrence of same concept (minutes, based on timestamps)
+                - sgaps (torch.tensor): time gap to previous item (minutes, based on timestamps)
+                - pcounts (torch.tensor): cumulative count of concept occurrences before current position
+                - pcumcounts (torch.tensor): count of items since last occurrence of same concept (position-based)
             - **dqtest (dict)**: used only self.qtest is True, for question level evaluation
         """
         dcur = dict()
@@ -187,7 +189,9 @@ class KTDataset(Dataset):
         """
         dori = {"qseqs": [], "cseqs": [], "rseqs": [], "tseqs": [], "utseqs": [], "smasks": []}
         # Interference gap data for AKT interference-based forgetting
-        dgaps = {"sgaps": [], "pcounts": []}
+        # 使用类似dkt_forget的指标：rgap, sgap, pcount（基于时间戳）
+        # 以及pcumcount（位置间隔）
+        dgaps = {"rgaps": [], "sgaps": [], "pcounts": [], "pcumcounts": [], "scumcounts": []}
 
         df = pd.read_csv(sequence_path)#[0:1000]
         df = df[df["fold"].isin(folds)]
@@ -213,21 +217,35 @@ class KTDataset(Dataset):
 
             interaction_num += dori["smasks"][-1].count(1)
 
-            # Calculate interference metrics based on concepts (or questions if no concepts)
-            # Prefer concepts since AKT works with concept-level knowledge tracing
+            # Calculate interference metrics
+            # 1. 基于时间戳的指标（rgap, sgap, pcount）- 使用calC函数
+            if "timestamps" in row:
+                rgap, sgap, pcount = self.calC(row)
+            else:
+                # 如果没有时间戳，使用零值
+                seq_len = len(dori["rseqs"][-1])
+                rgap = [0] * seq_len
+                sgap = [0] * seq_len
+                pcount = [0] * seq_len
+            
+            # 2. 基于位置的指标（pcumcount）- 自上次相同概念出现以来的项目数
             if concepts is not None:
-                sgap = calculate_sgap_seq(concepts)
-                pcount = calculate_pcount_seq(concepts)
+                pcumcount = calculate_pcount_seq(concepts)
+                scumcount = calculate_sgap_seq(concepts)  # 添加：到下一个相同概念出现的距离
             elif "questions" in self.input_type:
-                sgap = calculate_sgap_seq(questions)
-                pcount = calculate_pcount_seq(questions)
+                pcumcount = calculate_pcount_seq(questions)
+                scumcount = calculate_sgap_seq(questions)  # 添加：到下一个相同概念出现的距离
             else:
                 # Fallback: create zero arrays
                 seq_len = len(dori["rseqs"][-1])
-                sgap = [0] * seq_len
-                pcount = [0] * seq_len
+                pcumcount = [0] * seq_len
+                scumcount = [0] * seq_len  # 添加
+            
+            dgaps["rgaps"].append(rgap)
             dgaps["sgaps"].append(sgap)
             dgaps["pcounts"].append(pcount)
+            dgaps["pcumcounts"].append(pcumcount)
+            dgaps["scumcounts"].append(scumcount)
 
             if self.qtest:
                 dqtest["qidxs"].append([int(_) for _ in row["qidxs"].split(",")])
@@ -255,3 +273,45 @@ class KTDataset(Dataset):
 
             return dori, dgaps, dqtest
         return dori, dgaps
+
+    def log2(self, t):
+        """计算log2(t+1)，用于时间间隔的归一化"""
+        import math
+        return round(math.log(t+1, 2))
+
+    def calC(self, row):
+        """
+        计算基于时间戳的干扰指标（类似dkt_forget）
+        
+        返回:
+            repeated_gap (rgap): 到上次相同概念出现的时间间隔（分钟）
+            sequence_gap (sgap): 到上一个项目的时间间隔（分钟）
+            past_counts (pcount): 该概念之前出现的累积次数
+        """
+        repeated_gap, sequence_gap, past_counts = [], [], []
+        uid = row["uid"]
+        # default: concepts
+        skills = row["concepts"].split(",") if "concepts" in self.input_type else row["questions"].split(",")
+        timestamps = row["timestamps"].split(",")
+        dlastskill, dcount = dict(), dict()
+        pret = None
+        for s, t in zip(skills, timestamps):
+            s, t = int(s), int(t)
+            if s not in dlastskill or s == -1:
+                curRepeatedGap = 0
+            else:
+                curRepeatedGap = self.log2((t - dlastskill[s]) / 1000 / 60) + 1  # minutes
+            dlastskill[s] = t
+
+            repeated_gap.append(curRepeatedGap)
+            if pret == None or t == -1:
+                curLastGap = 0
+            else:
+                curLastGap = self.log2((t - pret) / 1000 / 60) + 1
+            pret = t
+            sequence_gap.append(curLastGap)
+
+            dcount.setdefault(s, 0)
+            past_counts.append(self.log2(dcount[s]))
+            dcount[s] += 1
+        return repeated_gap, sequence_gap, past_counts

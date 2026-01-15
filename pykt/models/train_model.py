@@ -244,15 +244,43 @@ def model_forward(model, data, rel=None):
     elif model_name in ["akt", "aktint", "extrakt","folibikt", "robustkt", "akt_vector", "akt_norasch", "akt_mono", "akt_attn", "aktattn_pos", "aktmono_pos", "akt_raschx", "akt_raschy", "aktvec_raschx", "lefokt_akt", "fluckt"]:
         # Prepare dgaps for AKTInt interference-based forgetting
         if model_name == "aktint" and dgaps is not None:
-            # Build concatenated sgaps and pcounts (same pattern as cc, cr, cq)
-            sgaps = dgaps["sgaps"].to(device)
-            pcounts = dgaps["pcounts"].to(device)
-            sgaps_shft = dgaps["shft_sgaps"].to(device)
-            pcounts_shft = dgaps["shft_pcounts"].to(device)
+            # Build concatenated interference metrics (same pattern as cc, cr, cq)
+            # New metrics: rgap, sgap, pcount (time-based), pcumcount (position-based)
+            # 消融实验：只使用 scumcounts
+            rgaps = dgaps["rgaps"].to(device)  # 消融实验：暂时注释
+            sgaps = dgaps["sgaps"].to(device)  # 消融实验：暂时注释
+            pcounts = dgaps["pcounts"].to(device)  # 消融实验：暂时注释
+            pcumcounts = dgaps["pcumcounts"].to(device)  # 消融实验：暂时注释
+            rgaps_shft = dgaps["shft_rgaps"].to(device)  # 消融实验：暂时注释
+            sgaps_shft = dgaps["shft_sgaps"].to(device)  # 消融实验：暂时注释
+            pcounts_shft = dgaps["shft_pcounts"].to(device)  # 消融实验：暂时注释
+            pcumcounts_shft = dgaps["shft_pcumcounts"].to(device)  # 消融实验：暂时注释
             # Concatenate to match cc, cr, cq structure: [first_item, shifted_items]
-            csgaps = torch.cat((sgaps[:,0:1], sgaps_shft), dim=1)
-            cpcounts = torch.cat((pcounts[:,0:1], pcounts_shft), dim=1)
-            dgaps_model = {"sgaps": csgaps, "pcounts": cpcounts}
+            crgaps = torch.cat((rgaps[:,0:1], rgaps_shft), dim=1)  # 消融实验：暂时注释
+            csgaps = torch.cat((sgaps[:,0:1], sgaps_shft), dim=1)  # 消融实验：暂时注释
+            cpcounts = torch.cat((pcounts[:,0:1], pcounts_shft), dim=1)  # 消融实验：暂时注释
+            cpcumcounts = torch.cat((pcumcounts[:,0:1], pcumcounts_shft), dim=1)  # 消融实验：暂时注释
+            
+            # 消融实验：只处理 scumcounts
+            scumcounts = dgaps.get("scumcounts", None)
+            if scumcounts is not None:
+                scumcounts = scumcounts.to(device)
+                scumcounts_shft = dgaps.get("shft_scumcounts", None)
+                if scumcounts_shft is not None:
+                    scumcounts_shft = scumcounts_shft.to(device)
+                    cscumcounts = torch.cat((scumcounts[:,0:1], scumcounts_shft), dim=1)
+                else:
+                    cscumcounts = scumcounts
+            else:
+                cscumcounts = None
+            
+            dgaps_model = {
+                "rgaps": crgaps,  # 消融实验：暂时注释
+                "sgaps": csgaps,  # 消融实验：暂时注释
+                "pcounts": cpcounts,  # 消融实验：暂时注释
+                "pcumcounts": cpcumcounts,  # 消融实验：暂时注释
+                "scumcounts": cscumcounts
+            }
             y, reg_loss = model(cc.long(), cr.long(), cq.long(), dgaps=dgaps_model)
         else:
             y, reg_loss = model(cc.long(), cr.long(), cq.long())
@@ -337,6 +365,8 @@ def train_model(model, train_loader, valid_loader, num_epochs, opt, ckpt_path, t
                 clip_grad_norm_(model.parameters(), model.grad_clip)
             if model.model_name == "dtransformer":
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            elif model.model_name == "aktint":  # 修改：添加这一行
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # 添加梯度裁剪
             opt.step()#update model’s parameters
                 
             loss_mean.append(loss.detach().cpu().numpy())
