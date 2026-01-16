@@ -139,7 +139,8 @@ class InterferenceAddNorm(nn.Module):
         # 将干扰指标编码为特征
         # sgap和pcount都是标量，需要映射到d_model维度
         self.interference_proj = nn.Sequential(
-            nn.Linear(2, d_model // 4),  # sgap + pcount -> d_model//4
+            # nn.Linear(2, d_model // 4),  # sgap + pcount -> d_model//4 消融实验：暂时注释
+            nn.Linear(1, d_model // 4),  # sgap + pcount -> d_model//4
             nn.ReLU(),
             nn.Linear(d_model // 4, d_model),  # -> d_model
             nn.Dropout(dropout)
@@ -215,7 +216,8 @@ class InterferenceAddNorm(nn.Module):
         pcount_norm = (torch.tanh(pcount_norm) + 1) / 2  # 映射到[0,1]
         
         # 拼接干扰指标 [batch_size, seq_len, 2]
-        interference_input = torch.stack([sgap_norm, pcount_norm], dim=-1)
+        # interference_input = torch.stack([sgap_norm, pcount_norm], dim=-1)
+        interference_input = torch.stack([pcount_norm], dim=-1) # 消融实验：暂时注释
 
         # 计算门控值：基于干扰信息本身决定是否使用
         # gate_value = self.gate_network(interference_input)  # [batch_size, seq_len, 1]
