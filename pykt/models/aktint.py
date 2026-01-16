@@ -86,7 +86,7 @@ class InterferenceAddNorm(nn.Module):
         self.interference_proj = nn.Sequential(
             # nn.Linear(2, d_model // 4),  # 4个指标 -> d_model//4
             # nn.Linear(d_model // 4, d_model),  # -> d_model
-            nn.Linear(1, d_model // 4),  # 消融实验，只留下pcumcount
+            nn.Linear(2, d_model // 4),  # 消融实验，只留下pcumcount
             nn.ReLU(),  # 添加激活函数，避免梯度消失
             nn.Linear(d_model // 4, d_model),  # 消融实验，只留下pcumcount
             nn.Dropout(dropout)
@@ -182,7 +182,7 @@ class InterferenceAddNorm(nn.Module):
         
         # 拼接干扰指标 [batch_size, seq_len, 4]
         # interference_input = torch.stack([rgap_norm, sgap_norm, pcount_norm, pcumcount_norm], dim=-1)  # 消融实验：暂时注释
-        interference_input = torch.stack([scumcount_norm], dim=-1)  # 消融实验：暂时注释
+        interference_input = torch.stack([pcumcount_norm, scumcount_norm], dim=-1)  # 消融实验：暂时注释
         
         # 编码为特征 [batch_size, seq_len, d_model]
         interference_features = self.interference_proj(interference_input)
