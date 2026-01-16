@@ -217,7 +217,7 @@ class InterferenceAddNorm(nn.Module):
         
         # 拼接干扰指标 [batch_size, seq_len, 2]
         # interference_input = torch.stack([sgap_norm, pcount_norm], dim=-1)
-        interference_input = torch.stack([pcount_norm], dim=-1) # 消融实验：暂时注释
+        interference_input = torch.stack([sgap_norm], dim=-1) # 消融实验：暂时注释
 
         # 计算门控值：基于干扰信息本身决定是否使用
         # gate_value = self.gate_network(interference_input)  # [batch_size, seq_len, 1]
