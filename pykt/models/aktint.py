@@ -139,8 +139,8 @@ class InterferenceAddNorm(nn.Module):
         # 将干扰指标编码为特征
         # sgap和pcount都是标量，需要映射到d_model维度
         self.interference_proj = nn.Sequential(
-            nn.Linear(2, d_model // 4),  # sgap + pcount -> d_model//4 消融实验：暂时注释
-            # nn.Linear(1, d_model // 4),  # sgap + pcount -> d_model//4
+            # nn.Linear(2, d_model // 4),  # sgap + pcount -> d_model//4 消融实验：暂时注释
+            nn.Linear(1, d_model // 4),  # sgap + pcount -> d_model//4
             nn.ReLU(),
             nn.Linear(d_model // 4, d_model),  # -> d_model
             nn.Dropout(dropout)
@@ -216,8 +216,8 @@ class InterferenceAddNorm(nn.Module):
         pcount_norm = (torch.tanh(pcount_norm) + 1) / 2  # 映射到[0,1]
         
         # 拼接干扰指标 [batch_size, seq_len, 2]
-        interference_input = torch.stack([sgap_norm, pcount_norm], dim=-1)
-        # interference_input = torch.stack([pcount_norm], dim=-1) # 消融实验：暂时注释
+        # interference_input = torch.stack([sgap_norm, pcount_norm], dim=-1)
+        interference_input = torch.stack([pcount_norm], dim=-1) # 消融实验：暂时注释
 
         # 计算门控值：基于干扰信息本身决定是否使用
         # gate_value = self.gate_network(interference_input)  # [batch_size, seq_len, 1]
@@ -619,16 +619,18 @@ def attention_int(q, k, v, d_k, mask, dropout, zero_pad, gamma=None, pdiff=None,
         dist_scores = torch.clamp((disttotal_scores-distcum_scores)*position_effect, min=0.)
         dist_scores = dist_scores.sqrt().detach()
 
-    m = nn.Softplus()
+    m = nn.Softplus() # 遗忘曲线
     gamma = -1. * m(gamma).unsqueeze(0)
     if pdiff == None:
-        temporal_effect = torch.clamp(torch.clamp(
-            (dist_scores*gamma).exp(), min=1e-5), max=1e5)
+        # temporal_effect = torch.clamp(torch.clamp( #------AS: Exp decay
+        #     (dist_scores*gamma).exp(), min=1e-5), max=1e5)
+        temporal_effect = torch.clamp(1 / (1 + torch.exp(-dist_scores * gamma)), min=1e-5, max=1e5)  #-----AS: sig decay
     else:
         diff = pdiff.unsqueeze(1).expand(pdiff.shape[0], dist_scores.shape[1], pdiff.shape[1], pdiff.shape[2])
         diff = diff.sigmoid().exp()
-        temporal_effect = torch.clamp(torch.clamp(
-            (dist_scores*gamma*diff).exp(), min=1e-5), max=1e5)
+        # temporal_effect = torch.clamp(torch.clamp( #------AS: Exp decay
+        #     (dist_scores*gamma*diff).exp(), min=1e-5), max=1e5)
+        temporal_effect = torch.clamp(1 / (1 + torch.exp(-dist_scores * gamma * diff)), min=1e-5, max=1e5)  #-----AS: sig decay
 
     # 只应用时间衰减，不应用干扰衰减
     # 干扰信息将在输出层通过残差连接添加（InterferenceAddNorm）
